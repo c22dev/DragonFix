@@ -1,5 +1,5 @@
 # DragonFix
-This plugin fixes the crash with EaglerCraft on 1.12.2 ran on a server when fighting the ender dragon (fixes the AreaEffectCloud)
+This Spigot Plugin fixes the crash with EaglerCraft on 1.12.2 ran on a server when fighting the ender dragon (fixes the AreaEffectCloud)
 
 ## Explaination
 Basically, the entity `AreaEffectCloud` makes EaglerCraft crash if the player is in a server running [EaglerXServer](https://github.com/lax1dude/eaglerxserver) (don't ask me why, I don't know).

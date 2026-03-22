@@ -1,0 +1,6 @@
+name: DragonFix
+version: 1.0.1
+main: ch.cclerc.dragonfix.Main
+api-version: 1.12
+author: DragonFix
+description: no AreaEffectCloud on eaglercraft 1.12.2

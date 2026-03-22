@@ -42,7 +42,6 @@ public class Main extends JavaPlugin implements Listener {
     private static final int PARTICLE_INTERVAL = 2;
     private static final int PARTICLES_PER_TICK = 8;
     private static final double DEFAULT_RADIUS = 3.0;
-
     private static final Random RNG = new Random();
 
     @Override

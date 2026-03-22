@@ -7,13 +7,15 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.v1_12_R1.CraftWorld;
 import org.bukkit.entity.AreaEffectCloud;
-import org.bukkit.entity.DragonFireball;
+import org.bukkit.entity.EnderDragon;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntitySpawnEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
@@ -22,9 +24,12 @@ import sun.misc.Unsafe;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 public class Main extends JavaPlugin implements Listener {
@@ -42,7 +47,11 @@ public class Main extends JavaPlugin implements Listener {
     private static final int PARTICLE_INTERVAL = 2;
     private static final int PARTICLES_PER_TICK = 8;
     private static final double DEFAULT_RADIUS = 3.0;
+
     private static final Random RNG = new Random();
+
+    private final Set<UUID> breathPlayers =
+            Collections.newSetFromMap(new ConcurrentHashMap<UUID, Boolean>());
 
     @Override
     public void onEnable() {
@@ -80,8 +89,19 @@ public class Main extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onEntitySpawn(EntitySpawnEvent event) {
         Entity entity = event.getEntity();
-        if (entity instanceof DragonFireball || entity instanceof AreaEffectCloud)
+        if (entity instanceof AreaEffectCloud)
             event.setCancelled(true);
+    }
+
+    @EventHandler
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        Player player = event.getEntity();
+        EntityDamageEvent lastDamage = player.getLastDamageCause();
+        if (lastDamage != null
+                && lastDamage.getCause() == EntityDamageEvent.DamageCause.MAGIC
+                && breathPlayers.contains(player.getUniqueId())) {
+            event.setDeathMessage(player.getName() + " was slain by Ender Dragon");
+        }
     }
 
     void startBreathDamage(final net.minecraft.server.v1_12_R1.Entity nmsEntity,
@@ -114,11 +134,12 @@ public class Main extends JavaPlugin implements Listener {
 
                 if (currentRadius < 0.5 || tick >= CLOUD_DURATION_TICKS) {
                     taskRef[0].cancel();
+                    for (UUID uid : nextHitTick.keySet()) breathPlayers.remove(uid);
                     return;
                 }
 
-                final double radiusSq          = currentRadius * currentRadius;
-                final double cylinderHalfH     = CYLINDER_HALF_HEIGHT + 1.8;
+                final double radiusSq      = currentRadius * currentRadius;
+                final double cylinderHalfH = CYLINDER_HALF_HEIGHT + 1.8;
 
                 final World world = getServer().getWorld(worldName);
                 if (world == null) { taskRef[0].cancel(); return; }
@@ -129,19 +150,43 @@ public class Main extends JavaPlugin implements Listener {
                         double dist  = currentRadius * Math.sqrt(RNG.nextDouble());
                         reusableLoc.setWorld(world);
                         reusableLoc.setX(x + dist * Math.cos(angle));
-                        reusableLoc.setY(y + RNG.nextDouble() * 1.5);
+                        reusableLoc.setY(y + 0.05 + RNG.nextDouble() * 0.15);
                         reusableLoc.setZ(z + dist * Math.sin(angle));
                         try {
                             world.spawnParticle(org.bukkit.Particle.DRAGON_BREATH,
                                     reusableLoc, 1, 0.0, 0.0, 0.0, 0.0);
                         } catch (Exception ignored) {}
                     }
-                }
 
-                reusableLoc.setWorld(world);
-                reusableLoc.setX(x);
-                reusableLoc.setY(y + CYLINDER_HALF_HEIGHT);
-                reusableLoc.setZ(z);
+                    if (tick <= 40) {
+                        EnderDragon dragon = null;
+                        double bestDist = Double.MAX_VALUE;
+                        for (Entity ent : world.getEntities()) {
+                            if (!(ent instanceof EnderDragon)) continue;
+                            Location dl = ent.getLocation();
+                            double d = (dl.getX()-x)*(dl.getX()-x)
+                                     + (dl.getZ()-z)*(dl.getZ()-z);
+                            if (d < bestDist) { bestDist = d; dragon = (EnderDragon) ent; }
+                        }
+                        if (dragon != null) {
+                            Location head = dragon.getLocation();
+                            for (int step = 0; step <= 8; step++) {
+                                double t  = step / 8.0;
+                                double bx = head.getX() + (x - head.getX()) * t;
+                                double by = head.getY() + (y - head.getY()) * t + 0.5;
+                                double bz = head.getZ() + (z - head.getZ()) * t;
+                                reusableLoc.setWorld(world);
+                                reusableLoc.setX(bx);
+                                reusableLoc.setY(by);
+                                reusableLoc.setZ(bz);
+                                try {
+                                    world.spawnParticle(org.bukkit.Particle.DRAGON_BREATH,
+                                            reusableLoc, 2, 0.1, 0.1, 0.1, 0.0);
+                                } catch (Exception ignored) {}
+                            }
+                        }
+                    }
+                }
 
                 for (Entity e : getServer().getOnlinePlayers()) {
                     if (!(e instanceof Player)) continue;
@@ -159,6 +204,7 @@ public class Main extends JavaPlugin implements Listener {
                     if (!nextHitTick.containsKey(uid)) {
                         nextHitTick.put(uid, tick);
                     }
+                    breathPlayers.add(uid);
 
                     if (tick >= nextHitTick.get(uid)) {
                         try {
@@ -171,9 +217,7 @@ public class Main extends JavaPlugin implements Listener {
                         }
                         nextHitTick.put(uid, tick + BASE_REAPPLY_TICKS
                                 + RNG.nextInt(REAPPLY_JITTER_TICKS));
-                        getLogger().info("[Breath] Damage to"
-                                + player.getName()
-                                + " (r=" + String.format("%.2f", currentRadius) + ")");
+                        getLogger().info("[Breath] Damaged " + player.getName());
                     }
                 }
             }

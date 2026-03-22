@@ -22,9 +22,7 @@ import sun.misc.Unsafe;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Random;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -146,13 +144,11 @@ public class Main extends JavaPlugin implements Listener {
                 reusableLoc.setY(y + CYLINDER_HALF_HEIGHT);
                 reusableLoc.setZ(z);
 
-                final List<Entity> nearby = world.getNearbyEntities(
-                        reusableLoc, currentRadius, cylinderHalfH, currentRadius);
-
-                for (Entity e : nearby) {
+                for (Entity e : getServer().getOnlinePlayers()) {
                     if (!(e instanceof Player)) continue;
                     final Player player = (Player) e;
                     final Location loc = player.getLocation();
+                    if (!loc.getWorld().getName().equals(worldName)) continue;
 
                     final double dx = loc.getX() - x;
                     final double dz = loc.getZ() - z;
@@ -176,7 +172,7 @@ public class Main extends JavaPlugin implements Listener {
                         }
                         nextHitTick.put(uid, tick + BASE_REAPPLY_TICKS
                                 + RNG.nextInt(REAPPLY_JITTER_TICKS));
-                        getLogger().info("[Breath] Damaged "
+                        getLogger().info("[Breath] Applied Instant Damage II to "
                                 + player.getName()
                                 + " (r=" + String.format("%.2f", currentRadius) + ")");
                     }

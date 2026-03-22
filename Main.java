@@ -172,7 +172,7 @@ public class Main extends JavaPlugin implements Listener {
                         }
                         nextHitTick.put(uid, tick + BASE_REAPPLY_TICKS
                                 + RNG.nextInt(REAPPLY_JITTER_TICKS));
-                        getLogger().info("[Breath] Applied Instant Damage II to "
+                        getLogger().info("[Breath] Damage to"
                                 + player.getName()
                                 + " (r=" + String.format("%.2f", currentRadius) + ")");
                     }

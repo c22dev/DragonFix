@@ -15,6 +15,8 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntitySpawnEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 import sun.misc.Unsafe;
 
@@ -22,34 +24,28 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Random;
 import java.util.UUID;
 import java.util.logging.Logger;
 
 public class Main extends JavaPlugin implements Listener {
 
     private static Unsafe UNSAFE;
+    private static Field  RADIUS_FIELD;
+    private static Field  TRACKER_FIELD;
 
+    private static final int CLOUD_DURATION_TICKS = 200;
+    private static final double RADIUS_SHRINK_PER_APP = 0.5;
+    private static final int BASE_REAPPLY_TICKS = 25;
+    private static final int REAPPLY_JITTER_TICKS = 10;
+    private static final double CYLINDER_HALF_HEIGHT = 1.0;
+    private static final int INSTANT_DAMAGE_ID = 7;
+    private static final int PARTICLE_INTERVAL = 2;
+    private static final int PARTICLES_PER_TICK = 8;
+    private static final double DEFAULT_RADIUS = 3.0;
 
-    private static Field RADIUS_FIELD;
-    private static Field TRACKER_FIELD;
-
-    private static final int    CLOUD_DURATION_TICKS  = 200;
-    private static final int    DAMAGE_INTERVAL_TICKS = 25;
-    private static final double DAMAGE_AMOUNT         = 6.0;
-    private static final double DEFAULT_RADIUS        = 3.0;
-    private static final int    PARTICLE_POINTS       = 12;
-    private static final int    PARTICLE_INTERVAL     = 3;
-
-    private static final double[] RING_COS = new double[PARTICLE_POINTS];
-    private static final double[] RING_SIN = new double[PARTICLE_POINTS];
-
-    static {
-        double step = 2.0 * Math.PI / PARTICLE_POINTS;
-        for (int i = 0; i < PARTICLE_POINTS; i++) {
-            RING_COS[i] = Math.cos(i * step);
-            RING_SIN[i] = Math.sin(i * step);
-        }
-    }
+    private static final Random RNG = new Random();
 
     @Override
     public void onEnable() {
@@ -91,7 +87,6 @@ public class Main extends JavaPlugin implements Listener {
             event.setCancelled(true);
     }
 
-
     void startBreathDamage(final net.minecraft.server.v1_12_R1.Entity nmsEntity,
                            final String worldName) {
         final double x = nmsEntity.locX;
@@ -102,85 +97,93 @@ public class Main extends JavaPlugin implements Listener {
         if (RADIUS_FIELD != null) {
             try { r = RADIUS_FIELD.getFloat(nmsEntity); } catch (Exception ignored) {}
         }
-        final double radius   = (r > 0 && r < 16) ? r : DEFAULT_RADIUS;
-        final double radiusSq = radius * radius;
+        final double initialRadius = (r > 0 && r < 16) ? r : DEFAULT_RADIUS;
 
-        getLogger().info(String.format("[Breath] Cloud at %.1f,%.1f,%.1f world=%s",
-                x, y, z, worldName));
-
-        final double[] ringX = new double[PARTICLE_POINTS];
-        final double[] ringZ = new double[PARTICLE_POINTS];
-        for (int i = 0; i < PARTICLE_POINTS; i++) {
-            ringX[i] = x + radius * RING_COS[i];
-            ringZ[i] = z + radius * RING_SIN[i];
-        }
+        getLogger().info(String.format("[Breath] Cloud at %.1f,%.1f,%.1f r=%.1f world=%s",
+                x, y, z, initialRadius, worldName));
 
         final int[]        ticksElapsed = {0};
         final BukkitTask[] taskRef      = {null};
-        final HashMap<UUID, Integer> lastHit = new HashMap<UUID, Integer>(4);
+        final HashMap<UUID, Integer> nextHitTick = new HashMap<UUID, Integer>(4);
         final Location reusableLoc = new Location(null, 0, 0, 0);
 
         taskRef[0] = getServer().getScheduler().runTaskTimer(this, new Runnable() {
             @Override
             public void run() {
                 final int tick = ++ticksElapsed[0];
-                if (tick >= CLOUD_DURATION_TICKS) {
+
+                final double currentRadius = initialRadius
+                        - RADIUS_SHRINK_PER_APP * (tick / (double) BASE_REAPPLY_TICKS);
+
+                if (currentRadius < 0.5 || tick >= CLOUD_DURATION_TICKS) {
                     taskRef[0].cancel();
                     return;
                 }
+
+                final double radiusSq          = currentRadius * currentRadius;
+                final double cylinderHalfH     = CYLINDER_HALF_HEIGHT + 1.8;
 
                 final World world = getServer().getWorld(worldName);
                 if (world == null) { taskRef[0].cancel(); return; }
 
                 if (tick % PARTICLE_INTERVAL == 0) {
-                    for (int i = 0; i < PARTICLE_POINTS; i++) {
-                        reusableLoc.setWorld(world);
-                        reusableLoc.setX(ringX[i]);
-                        reusableLoc.setY(y + 0.05);
-                        reusableLoc.setZ(ringZ[i]);
-                        try {
-                            world.spawnParticle(org.bukkit.Particle.DRAGON_BREATH,
-                                    reusableLoc, 3, 0.1, 0.3, 0.1, 0.0);
-                        } catch (Exception ignored) {}
-                    }
-
-                    final double base = tick * 0.25;
-                    for (int i = 0; i < 6; i++) {
-                        double angle = base + i * (Math.PI / 3);
-                        double dist  = radius * (i % 2 == 0 ? 0.7 : 0.5);
+                    for (int i = 0; i < PARTICLES_PER_TICK; i++) {
+                        double angle = RNG.nextDouble() * 2.0 * Math.PI;
+                        double dist  = currentRadius * Math.sqrt(RNG.nextDouble());
                         reusableLoc.setWorld(world);
                         reusableLoc.setX(x + dist * Math.cos(angle));
-                        reusableLoc.setY(y + 0.1);
+                        reusableLoc.setY(y + RNG.nextDouble() * 1.5);
                         reusableLoc.setZ(z + dist * Math.sin(angle));
                         try {
                             world.spawnParticle(org.bukkit.Particle.DRAGON_BREATH,
-                                    reusableLoc, 4, 0.2, 0.4, 0.2, 0.0);
+                                    reusableLoc, 1, 0.0, 0.0, 0.0, 0.0);
                         } catch (Exception ignored) {}
                     }
                 }
 
-                final Collection<? extends Player> online = getServer().getOnlinePlayers();
-                for (Player player : online) {
+                reusableLoc.setWorld(world);
+                reusableLoc.setX(x);
+                reusableLoc.setY(y + CYLINDER_HALF_HEIGHT);
+                reusableLoc.setZ(z);
+
+                final List<Entity> nearby = world.getNearbyEntities(
+                        reusableLoc, currentRadius, cylinderHalfH, currentRadius);
+
+                for (Entity e : nearby) {
+                    if (!(e instanceof Player)) continue;
+                    final Player player = (Player) e;
                     final Location loc = player.getLocation();
-                    if (!loc.getWorld().getName().equals(worldName)) continue;
 
                     final double dx = loc.getX() - x;
-                    final double dy = loc.getY() - y;
                     final double dz = loc.getZ() - z;
-                    if (dx*dx + dy*dy + dz*dz > radiusSq) continue;
+                    final double dy = loc.getY() - y;
+                    if (dx*dx + dz*dz > radiusSq) continue;
+                    if (Math.abs(dy) > cylinderHalfH) continue;
 
-                    final UUID uid  = player.getUniqueId();
-                    final int  last = lastHit.getOrDefault(uid, tick - DAMAGE_INTERVAL_TICKS);
-                    if (tick - last >= DAMAGE_INTERVAL_TICKS) {
-                        player.damage(DAMAGE_AMOUNT);
-                        lastHit.put(uid, tick);
-                        getLogger().info("[Breath] Damaged " + player.getName());
+                    final UUID uid = player.getUniqueId();
+                    if (!nextHitTick.containsKey(uid)) {
+                        nextHitTick.put(uid, tick);
+                    }
+
+                    if (tick >= nextHitTick.get(uid)) {
+                        try {
+                            player.addPotionEffect(
+                                    new PotionEffect(PotionEffectType.getById(INSTANT_DAMAGE_ID),
+                                            1, 1, false, false),
+                                    true);
+                        } catch (Exception ex) {
+                            player.damage(6.0);
+                        }
+                        nextHitTick.put(uid, tick + BASE_REAPPLY_TICKS
+                                + RNG.nextInt(REAPPLY_JITTER_TICKS));
+                        getLogger().info("[Breath] Damaged "
+                                + player.getName()
+                                + " (r=" + String.format("%.2f", currentRadius) + ")");
                     }
                 }
             }
         }, 0L, 1L);
     }
-
 
     private void hookTracker(World world) {
         if (TRACKER_FIELD == null) {
